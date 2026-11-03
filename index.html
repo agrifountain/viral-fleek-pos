@@ -310,7 +310,7 @@ async function pickShop(cached){
   let r=null;try{r=await sb.from('shop_members').select('role, shops(id,name,status)').limit(5)}catch(e){r=null}
   if(r&&!r.error){
     if(!r.data.length){authErr='This login is not linked to a shop yet. Contact your system provider.';try{await sb.auth.signOut()}catch(e){}return false}
-    const s=r.data[0].shops;SHOP={id:s.id,name:s.name,status:s.status};ls.set('pos:shop',SHOP);return true;
+    const s=r.data[0].shops;SHOP={id:s.id,name:s.name,status:s.status,role:r.data[0].role||'owner'};ls.set('pos:shop',SHOP);return true;
   }
   if(cached){SHOP=cached;mode='offline';return true}
   authErr='Cannot reach the server. Check the internet connection and try again.';return false;
@@ -433,12 +433,13 @@ function renderLogin(){
   let el=$('#login');if(!el){el=document.createElement('div');el.id='login';el.className='login';document.body.appendChild(el)}
   const s=S();
   el.innerHTML='<div class="box"><div><h1>'+h(s.shopName).replace(/(\S+)$/,'<em>$1</em>')+'</h1><div class="sub" style="margin-top:8px">Who is on the till?</div></div>'+
-   '<div class="who-pick"><button data-act="role" data-r="owner" aria-pressed="'+(loginRole==='owner')+'">Owner</button><button data-act="role" data-r="staff" aria-pressed="'+(loginRole==='staff')+'">'+h(s.staffName)+'</button></div>'+
+   (staffDevice()?'<div class="who-pick" style="grid-template-columns:1fr"><button data-act="role" data-r="staff" aria-pressed="true">'+h(s.staffName)+'</button></div>':'<div class="who-pick"><button data-act="role" data-r="owner" aria-pressed="'+(loginRole==='owner')+'">Owner</button><button data-act="role" data-r="staff" aria-pressed="'+(loginRole==='staff')+'">'+h(s.staffName)+'</button></div>')+
    '<div class="pins" aria-label="PIN entered">'+[0,1,2,3].map(i=>'<i class="'+(i<pinBuf.length?'on':'')+'"></i>').join('')+'</div><div class="err" role="alert">'+h(loginErr)+'</div>'+
    '<div class="pad">'+[1,2,3,4,5,6,7,8,9].map(n=>'<button data-act="pin" data-n="'+n+'">'+n+'</button>').join('')+'<button data-act="pinclr" aria-label="Clear">C</button><button data-act="pin" data-n="0">0</button><button data-act="pindel" aria-label="Delete">⌫</button></div>'+
    ((!s.ownerPinH||!s.staffPinH)?'<div class="sub">First time? Starting PINs are Owner 1234 and Staff 0000. Change them in Settings.</div>':'')+'<button class="btn ghost sm" data-act="signout">Not your shop? Sign out of this device</button></div>';
 }
-async function tryPin(){
+const staffDevice=()=>!!(SHOP&&SHOP.role==='staff');
+async function tryPin(){if(staffDevice())loginRole='staff';
   const s=S();const hsh=await sha(pinBuf);const want=loginRole==='owner'?(s.ownerPinH||DEF_OWNER_H):(s.staffPinH||DEF_STAFF_H);
   if(hsh===want){setMe({role:loginRole,at:Date.now()});pinBuf='';loginErr='';view='sell';render()}else{pinBuf='';loginErr='That PIN is not right. Try again.';renderLogin()}
 }
