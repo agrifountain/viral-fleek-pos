@@ -241,7 +241,7 @@ function write(col,id,op,data){
 }
 function scheduleRetry(ms){clearTimeout(retryT);retryT=setTimeout(()=>{flush();if(mode==='offline')refresh()},ms||15000)}
 async function flush(){
-  if(!sb||!SHOP||flushing||!outbox.length)return;flushing=true;renderSync();
+  if(!sb||!SHOP||flushing||!outbox.length)return;flushing=true;renderSync();let triedRefresh=false;
   try{
     while(outbox.length){
       const o=outbox[0];let res;
@@ -255,6 +255,7 @@ async function flush(){
       const code=String(err.code||''),msg=String(err.message||'');
       if(code==='P0002'){outbox.shift();const full=mem[o.col][o.id];if(full)outbox.unshift({col:o.col,id:o.id,op:'set',data:clone(full)});persist();continue}
       if(code==='42501'||/row-level security|permission denied/i.test(msg)){syncErr='The server refused to save. The shop account may be paused. Contact your system provider. Your sales are safe on this device.';break}
+      if((code==='PGRST301'||code==='PGRST303'||/jwt|token/i.test(msg))&&!triedRefresh){triedRefresh=true;try{const rr=await sb.auth.refreshSession();if(!rr.error)continue}catch(e){}mode='offline';scheduleRetry(15000);break}
       if(code==='PGRST301'||code==='PGRST303'||/jwt|token/i.test(msg)){syncErr='Your login has expired. Go to Settings › Sign out, then sign in again. Your sales are safe on this device.';break}
       if(/^(22|23)/.test(code)){outbox.shift();persist();console.warn('Dropped a change the database rejected',o,err);continue}
       mode='offline';scheduleRetry(12000);break;
@@ -298,12 +299,14 @@ setInterval(()=>{if(SHOP&&document.visibilityState==='visible')refresh()},300000
 function prune(){const cut=addDays(dayStr(),-62);let n=0;for(const id in mem.sales){if((mem.sales[id].day||'')<cut&&!pending('sales',id)){delete mem.sales[id];n++}}if(n)persist()}
 
 /* ---------- sign-in to the shop account ---------- */
+async function serverReachable(){if(!navigator.onLine)return false;try{const c=new AbortController();const t=setTimeout(()=>c.abort(),5000);const r=await fetch(CFG.url+'/auth/v1/health',{headers:{apikey:CFG.key},signal:c.signal,cache:'no-store'});clearTimeout(t);return r.status<500}catch(e){return false}}
 async function startCloud(){
   if(!window.supabase||!CFG.url||!CFG.key){authErr='The till is not set up yet: missing server details.';return false}
   sb=window.supabase.createClient(CFG.url,CFG.key,{auth:{persistSession:true,autoRefreshToken:true,storageKey:'pos-auth'}});
-  let session=null;try{session=(await sb.auth.getSession()).data.session}catch(e){}
+  let session=null;try{const g=sb.auth.getSession();session=(await Promise.race([g,new Promise(r=>setTimeout(()=>r({data:{session:null}}),6000))])).data.session}catch(e){}
+  if(!session){try{const raw=localStorage.getItem('pos-auth');if(raw&&JSON.parse(raw).access_token&&ls.get('pos:shop',null)&&!(await serverReachable())){SHOP=ls.get('pos:shop',null);mode='offline';return true}}catch(e){}}
   const cached=ls.get('pos:shop',null);
-  if(!session){if(cached&&!navigator.onLine){SHOP=cached;mode='offline';return true}return false}
+  if(!session){if(cached&&!(await serverReachable())){SHOP=cached;mode='offline';return true}return false}
   return await pickShop(cached);
 }
 async function pickShop(cached){
@@ -337,7 +340,8 @@ async function signOut(){
 function afterShop(){
   if(SHOP.status==='suspended'){renderSuspended();return}
   loadLocal();prune();render();renderSync();
-  if(navigator.onLine||mode!=='offline'){mode='connecting';renderSync();listen()}
+  if(mode!=='offline'){mode='connecting';renderSync()}
+  listen();setTimeout(()=>{if(mode==='connecting'){mode='offline';renderSync()}},10000);
   if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 }
 
